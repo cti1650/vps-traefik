@@ -1,0 +1,84 @@
+services:
+  traefik:
+    image: traefik:latest
+    container_name: traefik
+    restart: always
+    ports:
+      - 5003:8080 # webUI
+      - 80:80
+      - 443:443
+      - 5432:5432
+    networks:
+      - traefik-network
+    labels:
+      - traefik.enable=true
+      # ダッシュボード用ルーター（HTTPS）
+      - traefik.http.routers.dashboard.service=api@internal
+      - traefik.http.routers.dashboard.entrypoints=websecure
+      - "traefik.http.routers.dashboard.rule=Host(`traefik.${SERVER_DOMAIN:-example.com}`)"
+      - traefik.http.routers.dashboard.tls=true
+      - traefik.http.routers.dashboard.tls.certresolver=${TRAEFIK_TLS_CERTRESOLVER:-myresolver}
+      # 認証ミドルウェアの設定
+      - traefik.http.routers.dashboard.middlewares=auth
+      - traefik.http.middlewares.auth.basicauth.users=${BASIC_AUTH:-admin:$$apr1$$QWg7Zz7w$$7}
+      # メトリクス用ルーター（内部ネットワークのみ）
+      - traefik.http.routers.metrics.rule=Host(`metrics.${SERVER_DOMAIN:-example.com}`)
+      - traefik.http.routers.metrics.service=prometheus@internal
+      - traefik.http.routers.metrics.entrypoints=metrics
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./traefik/traefik.yml:/etc/traefik/traefik.yml:ro
+      - ./traefik/letsencrypt:/letsencrypt
+    environment:
+      - TZ=Asia/Tokyo
+      - SERVER_DOMAIN=${SERVER_DOMAIN:-example.com}
+      - SERVER_OWNER_EMAIL=${SERVER_OWNER_EMAIL:-admin@example.com}
+
+  prometheus:
+    image: prom/prometheus:latest
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    networks:
+      - traefik-network
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.prometheus.rule=Host(`prometheus.${SERVER_DOMAIN:-example.com}`)
+      - traefik.http.routers.prometheus.entrypoints=websecure
+      - traefik.http.routers.prometheus.tls=true
+      - traefik.http.routers.prometheus.tls.certresolver=${TRAEFIK_TLS_CERTRESOLVER:-myresolver}
+      - traefik.http.services.prometheus.loadbalancer.server.port=9090
+      # 認証ミドルウェアの設定
+      - traefik.http.routers.prometheus.middlewares=auth
+
+  grafana:
+    image: grafana/grafana:latest
+    volumes:
+      - grafana_data:/var/lib/grafana
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-admin}
+      - GF_USERS_ALLOW_SIGN_UP=false
+    networks:
+      - traefik-network
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.grafana.rule=Host(`grafana.${SERVER_DOMAIN:-example.com}`)
+      - traefik.http.routers.grafana.entrypoints=websecure
+      - traefik.http.routers.grafana.tls=true
+      - traefik.http.routers.grafana.tls.certresolver=${TRAEFIK_TLS_CERTRESOLVER:-myresolver}
+      - traefik.http.services.grafana.loadbalancer.server.port=3000
+    depends_on:
+      - prometheus
+
+networks:
+  traefik-network:
+    name: traefik-network
+    external: true
+    # driver: bridge
+
+volumes:
+  prometheus_data:
+  grafana_data:
